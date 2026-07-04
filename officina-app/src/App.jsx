@@ -65,62 +65,148 @@ body { margin: 0; }
 const CLIENT_LIST_COLUMNS = "id, nome, cognome, telefono, auto";
 const APPT_LIST_COLUMNS = "id, clientId, clientNome, clientCognome, auto, lavoro, data, ora";
 
+// Global error reporter: any db* function that fails calls this, so the UI can
+// show a visible banner instead of silently pretending everything is fine.
+let dbErrorHandler = null;
+function setDbErrorHandler(fn) {
+  dbErrorHandler = fn;
+}
+function reportDbError(context, err) {
+  const msg = (err && (err.message || err.hint || err.details)) || String(err) || "errore sconosciuto";
+  console.error(context, err);
+  if (dbErrorHandler) dbErrorHandler(`${context}: ${msg}`);
+}
+
+function withDbTimeout(promise, ms = 10000) {
+  return new Promise((resolve) => {
+    let done = false;
+    const timer = setTimeout(() => {
+      if (!done) {
+        done = true;
+        console.error("Richiesta al database scaduta (timeout)");
+        resolve({ data: null, error: { message: "timeout" } });
+      }
+    }, ms);
+    promise.then(
+      (v) => {
+        if (!done) {
+          done = true;
+          clearTimeout(timer);
+          resolve(v);
+        }
+      },
+      (e) => {
+        if (!done) {
+          done = true;
+          clearTimeout(timer);
+          resolve({ data: null, error: e });
+        }
+      }
+    );
+  });
+}
+
 async function dbFetchClientsList() {
-  const { data, error } = await supabase.from("clients").select(CLIENT_LIST_COLUMNS).order("cognome", { ascending: true });
-  if (error) {
-    console.error("Errore caricamento clienti", error);
+  try {
+    const { data, error } = await withDbTimeout(supabase.from("clients").select(CLIENT_LIST_COLUMNS).order("cognome", { ascending: true }));
+    if (error) {
+      reportDbError("Errore caricamento clienti", error);
+      return [];
+    }
+    return data || [];
+  } catch (e) {
+    reportDbError("Errore caricamento clienti", e);
     return [];
   }
-  return data || [];
 }
 async function dbFetchAppointmentsList() {
-  const { data, error } = await supabase.from("appointments").select(APPT_LIST_COLUMNS);
-  if (error) {
-    console.error("Errore caricamento appuntamenti", error);
+  try {
+    const { data, error } = await withDbTimeout(supabase.from("appointments").select(APPT_LIST_COLUMNS));
+    if (error) {
+      reportDbError("Errore caricamento appuntamenti", error);
+      return [];
+    }
+    return data || [];
+  } catch (e) {
+    reportDbError("Errore caricamento appuntamenti", e);
     return [];
   }
-  return data || [];
 }
 async function dbFetchClientFull(id) {
-  const { data, error } = await supabase.from("clients").select("*").eq("id", id).maybeSingle();
-  if (error) {
-    console.error("Errore caricamento scheda cliente", error);
+  try {
+    const { data, error } = await withDbTimeout(supabase.from("clients").select("*").eq("id", id).maybeSingle());
+    if (error) {
+      reportDbError("Errore caricamento scheda cliente", error);
+      return null;
+    }
+    return data;
+  } catch (e) {
+    reportDbError("Errore caricamento scheda cliente", e);
     return null;
   }
-  return data;
 }
 async function dbFetchApptFull(id) {
-  const { data, error } = await supabase.from("appointments").select("*").eq("id", id).maybeSingle();
-  if (error) {
-    console.error("Errore caricamento appuntamento", error);
+  try {
+    const { data, error } = await withDbTimeout(supabase.from("appointments").select("*").eq("id", id).maybeSingle());
+    if (error) {
+      reportDbError("Errore caricamento appuntamento", error);
+      return null;
+    }
+    return data;
+  } catch (e) {
+    reportDbError("Errore caricamento appuntamento", e);
     return null;
   }
-  return data;
 }
 async function dbUpsertClient(clientObj) {
-  const { error } = await supabase.from("clients").upsert(clientObj, { onConflict: "id" });
-  if (error) console.error("Errore salvataggio cliente", error);
-  return !error;
+  try {
+    const { error } = await withDbTimeout(supabase.from("clients").upsert(clientObj, { onConflict: "id" }));
+    if (error) reportDbError("Errore salvataggio cliente", error);
+    return !error;
+  } catch (e) {
+    reportDbError("Errore salvataggio cliente", e);
+    return false;
+  }
 }
 async function dbUpsertAppointment(apptObj) {
-  const { error } = await supabase.from("appointments").upsert(apptObj, { onConflict: "id" });
-  if (error) console.error("Errore salvataggio appuntamento", error);
-  return !error;
+  try {
+    const { error } = await withDbTimeout(supabase.from("appointments").upsert(apptObj, { onConflict: "id" }));
+    if (error) reportDbError("Errore salvataggio appuntamento", error);
+    return !error;
+  } catch (e) {
+    reportDbError("Errore salvataggio appuntamento", e);
+    return false;
+  }
 }
 async function dbDeleteClient(id) {
-  const { error } = await supabase.from("clients").delete().eq("id", id);
-  if (error) console.error("Errore eliminazione cliente", error);
-  return !error;
+  try {
+    const { error } = await withDbTimeout(supabase.from("clients").delete().eq("id", id));
+    if (error) reportDbError("Errore eliminazione cliente", error);
+    return !error;
+  } catch (e) {
+    reportDbError("Errore eliminazione cliente", e);
+    return false;
+  }
 }
 async function dbDeleteAppointment(id) {
-  const { error } = await supabase.from("appointments").delete().eq("id", id);
-  if (error) console.error("Errore eliminazione appuntamento", error);
-  return !error;
+  try {
+    const { error } = await withDbTimeout(supabase.from("appointments").delete().eq("id", id));
+    if (error) reportDbError("Errore eliminazione appuntamento", error);
+    return !error;
+  } catch (e) {
+    reportDbError("Errore eliminazione appuntamento", e);
+    return false;
+  }
 }
 async function dbUpdateAppointmentSchedule(id, data, ora) {
-  const { error } = await supabase.from("appointments").update({ data, ora, updatedAt: Date.now() }).eq("id", id);
-  if (error) console.error("Errore spostamento appuntamento", error);
-  return !error;
+  try {
+    const { error } = await withDbTimeout(supabase.from("appointments").update({ data, ora, updatedAt: Date.now() }).eq("id", id));
+    if (error) reportDbError("Errore spostamento appuntamento", error);
+    return !error;
+  } catch (e) {
+    reportDbError("Errore spostamento appuntamento", e);
+    return false;
+  }
 }
 
 function newId(prefix) {
@@ -972,29 +1058,48 @@ function CalendarView({ appointments, onOpenAppt, onNewAtDate }) {
 
 function AppointmentDetailModal({ apptId, onClose, onEdit, loadApptFull, onDelete, onReschedule }) {
   const [full, setFull] = useState(null);
+  const [loadState, setLoadState] = useState("loading"); // 'loading' | 'loaded' | 'error'
   const [confirmDel, setConfirmDel] = useState(false);
   const [busy, setBusy] = useState(false);
   const [showReschedule, setShowReschedule] = useState(false);
   const [newData, setNewData] = useState("");
   const [newOra, setNewOra] = useState("");
   const [moving, setMoving] = useState(false);
+  const [reloadTick, setReloadTick] = useState(0);
 
   useEffect(() => {
     let alive = true;
+    setLoadState("loading");
     loadApptFull(apptId).then((f) => {
       if (!alive) return;
-      setFull(f);
       if (f) {
+        setFull(f);
         setNewData(f.data);
         setNewOra(f.ora);
+        setLoadState("loaded");
+      } else {
+        setLoadState("error");
       }
     });
     return () => {
       alive = false;
     };
-  }, [apptId]);
+  }, [apptId, reloadTick]);
 
-  if (!full) {
+  if (loadState === "error") {
+    return (
+      <ModalShell onClose={onClose} title="Appuntamento">
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14, padding: 30 }}>
+          <Banner tone="error">Non sono riuscita a caricare questo appuntamento. Controlla la connessione e riprova.</Banner>
+          <BigButton icon={undefined} onClick={() => setReloadTick((t) => t + 1)} full={false}>
+            Riprova
+          </BigButton>
+        </div>
+      </ModalShell>
+    );
+  }
+
+  if (loadState === "loading" || !full) {
     return (
       <ModalShell onClose={onClose} title="Appuntamento">
         <div style={{ display: "flex", justifyContent: "center", padding: 30 }}>
@@ -1670,18 +1775,24 @@ function ClientsView({ clientsIndex, onOpenClient, onNewClient }) {
 
 function ClientDetailModal({ clientId, isNew, loadClientFull, onSaveClient, onDeleteClient, onClose, appointmentsIndex, onOpenAppt }) {
   const [data, setData] = useState({ nome: "", cognome: "", telefono: "", note: "", docFronte: null, docRetro: null, auto: [] });
-  const [loading, setLoading] = useState(!isNew);
+  const [loadState, setLoadState] = useState(isNew ? "loaded" : "loading"); // 'loading' | 'loaded' | 'error'
   const [saving, setSaving] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
+  const [reloadTick, setReloadTick] = useState(0);
 
   useEffect(() => {
     if (!isNew && clientId) {
+      setLoadState("loading");
       loadClientFull(clientId).then((f) => {
-        if (f) setData(f);
-        setLoading(false);
+        if (f) {
+          setData(f);
+          setLoadState("loaded");
+        } else {
+          setLoadState("error");
+        }
       });
     }
-  }, [clientId, isNew]);
+  }, [clientId, isNew, reloadTick]);
 
   function updateAuto(idx, field, value) {
     setData((d) => ({ ...d, auto: d.auto.map((a, i) => (i === idx ? { ...a, [field]: value } : a)) }));
@@ -1706,7 +1817,20 @@ function ClientDetailModal({ clientId, isNew, loadClientFull, onSaveClient, onDe
     setSaving(false);
   }
 
-  if (loading) {
+  if (loadState === "error") {
+    return (
+      <ModalShell onClose={onClose} title="Cliente">
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14, padding: 30 }}>
+          <Banner tone="error">Non sono riuscita a caricare questo cliente. Controlla la connessione e riprova.</Banner>
+          <BigButton onClick={() => setReloadTick((t) => t + 1)} full={false}>
+            Riprova
+          </BigButton>
+        </div>
+      </ModalShell>
+    );
+  }
+
+  if (loadState === "loading") {
     return (
       <ModalShell onClose={onClose} title="Cliente">
         <div style={{ display: "flex", justifyContent: "center", padding: 30 }}>
@@ -1899,11 +2023,17 @@ export default function App() {
   const [clients, setClients] = useState([]);
   const [appointments, setAppointments] = useState([]);
   const [tab, setTab] = useState("calendar");
+  const [dbError, setDbError] = useState(null);
 
   const [openApptId, setOpenApptId] = useState(null);
   const [formState, setFormState] = useState(null); // { editingAppt, presetDate } or null
   const [clientModal, setClientModal] = useState(null); // { id, isNew }
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  useEffect(() => {
+    setDbErrorHandler((msg) => setDbError(msg));
+    return () => setDbErrorHandler(null);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -2120,6 +2250,18 @@ export default function App() {
     <div className="oc-root" style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
       <style>{GLOBAL_CSS}</style>
       <Header onOpenSettings={() => setSettingsOpen(true)} />
+
+      {dbError && (
+        <div style={{ padding: "10px 16px 0" }}>
+          <div style={{ background: COLORS.dangerSoft, borderRadius: 12, padding: "10px 12px", display: "flex", alignItems: "flex-start", gap: 8 }}>
+            <AlertCircle size={16} color={COLORS.danger} style={{ marginTop: 2, flexShrink: 0 }} />
+            <div style={{ flex: 1, fontSize: 12.5, color: COLORS.danger, fontWeight: 600, lineHeight: 1.4 }}>{dbError}</div>
+            <button className="oc-btn" onClick={() => setDbError(null)} style={{ background: "transparent", padding: 2, display: "flex", flexShrink: 0 }}>
+              <X size={15} color={COLORS.danger} />
+            </button>
+          </div>
+        </div>
+      )}
 
       <div style={{ flex: 1, paddingBottom: 8 }}>
         {tab === "calendar" && (
